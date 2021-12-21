@@ -18,15 +18,15 @@
 package com.vaticle.typedb.console;
 
 import com.vaticle.typedb.client.TypeDB;
+import com.vaticle.typedb.client.api.answer.ConceptMap;
+import com.vaticle.typedb.client.api.answer.ConceptMapGroup;
+import com.vaticle.typedb.client.api.answer.Numeric;
+import com.vaticle.typedb.client.api.answer.NumericGroup;
 import com.vaticle.typedb.client.api.connection.TypeDBClient;
 import com.vaticle.typedb.client.api.connection.TypeDBCredential;
 import com.vaticle.typedb.client.api.connection.TypeDBOptions;
 import com.vaticle.typedb.client.api.connection.TypeDBSession;
 import com.vaticle.typedb.client.api.connection.TypeDBTransaction;
-import com.vaticle.typedb.client.api.answer.ConceptMap;
-import com.vaticle.typedb.client.api.answer.ConceptMapGroup;
-import com.vaticle.typedb.client.api.answer.Numeric;
-import com.vaticle.typedb.client.api.answer.NumericGroup;
 import com.vaticle.typedb.client.api.connection.database.Database;
 import com.vaticle.typedb.client.api.connection.user.User;
 import com.vaticle.typedb.client.api.query.QueryFuture;
@@ -75,20 +75,22 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import static org.jline.builtins.Completers.TreeCompleter.node;
 import static com.vaticle.typedb.common.collection.Collections.set;
 import static com.vaticle.typedb.console.common.exception.ErrorMessage.Console.INCOMPATIBLE_JAVA_RUNTIME;
 import static java.util.stream.Collectors.toList;
+import static org.jline.builtins.Completers.TreeCompleter.node;
 
 public class TypeDBConsole {
 
@@ -719,32 +721,63 @@ public class TypeDBConsole {
     }
 
     private <T> void printCancellableResult(Stream<T> results, Consumer<T> printFn) {
-        long[] counter = new long[]{0};
-        long[] resultsNanos = new long[] {0};
-        Terminal.SignalHandler prevHandler = null;
-        try {
-            Iterator<T> iterator = results.iterator();
-            Future<?> answerPrintingJob = executorService.submit(() -> {
-                long start = System.nanoTime();
-                T next = iterator.hasNext() ? iterator.next() : null;
-                resultsNanos[0] += System.nanoTime() - start;
-                while (next != null && !Thread.interrupted()) {
-                    printFn.accept(next);
-                    counter[0]++;
+        BlockingQueue<Either<T, String>> resultQueue = new LinkedBlockingQueue<>();
+        Future<?> printWorker = executorService.submit(() -> {
+            try {
+                Instant start = Instant.now();
+                Either<T, String> next;
+                while ((next = resultQueue.take()).isFirst()) {
+                    if (Thread.interrupted()) {
+                        printer.info("printer interrupted");
+                        return;
+                    }
+                    printFn.accept(next.first());
                 }
-            });
-            prevHandler = terminal.handle(Terminal.Signal.INT, s -> answerPrintingJob.cancel(true));
-            answerPrintingJob.get();
-            printer.info("answers: " + counter[0] + ", query duration: " + Duration.ofNanos(resultsNanos[0]).toMillis() + " ms");
+                assert next.isSecond();
+                printer.info(next.second());
+                printer.info("Printing time: " + Duration.between(start, Instant.now()).toMillis() + " ms");
+            } catch (InterruptedException e) {
+                throw TypeDBConsoleException.of(e);
+            }
+        });
+        Future<?> resultWorker = executorService.submit(() -> {
+            Instant start = Instant.now();
+            Iterator<T> resultsIterator = results.iterator();
+            long answers = 0;
+            boolean finished = false;
+            try {
+                while (resultsIterator.hasNext()) {
+                    resultQueue.put(Either.first(resultsIterator.next()));
+                    answers++;
+                }
+                Duration elapsed = Duration.between(start, Instant.now());
+                resultQueue.put(Either.second("Answers: " + answers + ", query duration: " + elapsed.toMillis() + " ms"));
+                finished = true;
+            } catch (InterruptedException e) {
+            } finally {
+                if (!finished) {
+                    Duration elapsed = Duration.between(start, Instant.now());
+                    printer.info("Query interrupted. Answers: " + answers + ", query duration: " + elapsed.toMillis() + " ms. " +
+                            "It may take some time for the query to finish on the server (close transaction to kill).");
+                }
+                results.close();
+            }
+        });
+
+        try {
+            terminal.handle(Terminal.Signal.INT, s -> printWorker.cancel(true));
+            terminal.handle(Terminal.Signal.INT, s -> resultWorker.cancel(true));
+            resultWorker.get();
+            printWorker.get();
         } catch (InterruptedException e) {
             e.printStackTrace();
         } catch (ExecutionException e) {
             throw (TypeDBClientException) e.getCause();
         } catch (CancellationException e) {
-            printer.info("answers: " + counter[0] + ", query duration: " + Duration.ofNanos(resultsNanos[0]).toMillis() + " ms");
-            printer.info("The query has been cancelled. It may take some time for the cancellation to finish on the server side.");
+            printer.info("Canceled.");
         } finally {
-            if (prevHandler != null) terminal.handle(Terminal.Signal.INT, prevHandler);
+            resultWorker.cancel(true);
+            printWorker.cancel(true);
         }
     }
 

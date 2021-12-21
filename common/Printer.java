@@ -116,7 +116,7 @@ public class Printer {
 
     private String isaDisplayString(Thing thing, TypeDBTransaction tx) {
         StringBuilder sb = new StringBuilder();
-        Type type = thing.asRemote(tx).getType();
+        Type type = thing.getType();
         sb.append(colorKeyword(TypeQLToken.Constraint.ISA.toString())).append(" ").append(colorType(type.getLabel().scopedName()));
         return sb.toString();
     }

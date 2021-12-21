@@ -31,12 +31,16 @@ public class TypeDBConsoleException extends RuntimeException {
         assert !getMessage().contains("%s");
     }
 
+    private TypeDBConsoleException(Exception e) {
+        super(e);
+    }
+
     public TypeDBConsoleException(String errorMessage) {
         super(errorMessage);
     }
 
-    public TypeDBConsoleException(IllegalArgumentException e) {
-        super(e);
+    public static TypeDBConsoleException of(Exception e) {
+        return new TypeDBConsoleException(e);
     }
 
     public static TypeDBConsoleException of(ErrorMessage errorMessage, Object... parameters) {

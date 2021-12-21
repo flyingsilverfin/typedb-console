@@ -463,7 +463,7 @@ public interface REPLCommand {
                 try {
                     options = option.build(options, arg);
                 } catch (IllegalArgumentException e) {
-                    throw new TypeDBConsoleException(e);
+                    throw TypeDBConsoleException.of(e);
                 }
             }
             return options;
@@ -478,7 +478,7 @@ public interface REPLCommand {
                 try {
                     options = option.build(options, arg);
                 } catch (IllegalArgumentException e) {
-                    throw new TypeDBConsoleException(e);
+                    throw TypeDBConsoleException.of(e);
                 }
             }
             return options;
