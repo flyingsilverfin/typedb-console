@@ -82,7 +82,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -721,27 +720,28 @@ public class TypeDBConsole {
 
     private <T> void printCancellableResult(Stream<T> results, Consumer<T> printFn) {
         long[] counter = new long[]{0};
-        Instant start = Instant.now();
+        long[] resultsNanos = new long[] {0};
         Terminal.SignalHandler prevHandler = null;
         try {
             Iterator<T> iterator = results.iterator();
             Future<?> answerPrintingJob = executorService.submit(() -> {
-                while (iterator.hasNext() && !Thread.interrupted()) {
-                    printFn.accept(iterator.next());
+                long start = System.nanoTime();
+                T next = iterator.hasNext() ? iterator.next() : null;
+                resultsNanos[0] += System.nanoTime() - start;
+                while (next != null && !Thread.interrupted()) {
+                    printFn.accept(next);
                     counter[0]++;
                 }
             });
             prevHandler = terminal.handle(Terminal.Signal.INT, s -> answerPrintingJob.cancel(true));
             answerPrintingJob.get();
-            Instant end = Instant.now();
-            printer.info("answers: " + counter[0] + ", duration: " + Duration.between(start, end).toMillis() + " ms");
+            printer.info("answers: " + counter[0] + ", query duration: " + Duration.ofNanos(resultsNanos[0]).toMillis() + " ms");
         } catch (InterruptedException e) {
             e.printStackTrace();
         } catch (ExecutionException e) {
             throw (TypeDBClientException) e.getCause();
         } catch (CancellationException e) {
-            Instant end = Instant.now();
-            printer.info("answers: " + counter[0] + ", duration: " + Duration.between(start, end).toMillis() + " ms");
+            printer.info("answers: " + counter[0] + ", query duration: " + Duration.ofNanos(resultsNanos[0]).toMillis() + " ms");
             printer.info("The query has been cancelled. It may take some time for the cancellation to finish on the server side.");
         } finally {
             if (prevHandler != null) terminal.handle(Terminal.Signal.INT, prevHandler);
@@ -881,6 +881,28 @@ public class TypeDBConsole {
         @Nullable
         private List<String> commands() {
             return commands;
+        }
+    }
+
+    private static class RunQueriesResult {
+        private final boolean success;
+        private final boolean hasChanges;
+
+        public RunQueriesResult(boolean success, boolean hasChanges) {
+            this.success = success;
+            this.hasChanges = hasChanges;
+        }
+
+        public static RunQueriesResult error() {
+            return new RunQueriesResult(false, false);
+        }
+
+        public boolean success() {
+            return success;
+        }
+
+        public boolean hasChanges() {
+            return hasChanges;
         }
     }
 }
