@@ -52,12 +52,8 @@ build:
         dependencies/maven/update.sh
         git diff --exit-code dependencies/maven/artifacts.snapshot
     deploy-artifact-snapshot:
-      filter:
-        owner: vaticle
-        branch: master
       image: vaticle-ubuntu-22.04
       type: foreground
-      dependencies: [build]
       command: |
         export ARTIFACT_USERNAME=$REPO_VATICLE_USERNAME
         export ARTIFACT_PASSWORD=$REPO_VATICLE_PASSWORD
